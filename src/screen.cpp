@@ -282,7 +282,7 @@ void Screen_::setBrightness(uint8_t brightness)
 
 #ifndef ESP8266
   // analogWrite disable the timer1 interrupt on esp8266
-  analogWrite(PIN_ENABLE, 255 - brightness);
+  ledcWrite(PIN_ENABLE, 255 - brightness);
 #endif
 }
 
