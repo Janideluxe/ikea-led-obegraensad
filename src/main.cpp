@@ -1,53 +1,118 @@
 #include <Arduino.h>
 #include <SPI.h>
 
-#ifdef ESP8266
-#include <ESP8266WiFi.h>
+#ifdef ESP32
+#include <WiFiManager.h>
 #endif
 #ifdef ESP32
-#include <WiFi.h>
+#include <ESPmDNS.h>
+#endif
+#ifdef ESP8266
+#include <ESP8266WiFi.h>
 #endif
 
 #include "PluginManager.h"
 
-#include "plugins/DrawPlugin.h"
 #include "plugins/BreakoutPlugin.h"
-#include "plugins/SnakePlugin.h"
-#include "plugins/GameOfLifePlugin.h"
-#include "plugins/StarsPlugin.h"
-#include "plugins/LinesPlugin.h"
 #include "plugins/CirclePlugin.h"
-#include "plugins/RainPlugin.h"
+#include "plugins/DrawPlugin.h"
 #include "plugins/FireworkPlugin.h"
+#include "plugins/GameOfLifePlugin.h"
+#include "plugins/LinesPlugin.h"
+#include "plugins/RainPlugin.h"
+#include "plugins/SnakePlugin.h"
+#include "plugins/StarsPlugin.h"
+#include "plugins/PongClockPlugin.h"
 
 #ifdef ENABLE_SERVER
+#include "plugins/AnimationPlugin.h"
 #include "plugins/BigClockPlugin.h"
 #include "plugins/ClockPlugin.h"
 #include "plugins/WeatherPlugin.h"
 #include "plugins/AnimationPlugin.h"
+#include "plugins/TickingClockPlugin.h"
 #endif
 
-#include "websocket.h"
-#include "secrets.h"
+#include "asyncwebserver.h"
 #include "ota.h"
-#include "webserver.h"
 #include "screen.h"
+#include "secrets.h"
+#include "websocket.h"
+#include "messages.h"
 
 unsigned long previousMillis = 0;
 unsigned long interval = 30000;
 
 PluginManager pluginManager;
 SYSTEM_STATUS currentStatus = NONE;
+#ifdef ESP32
+WiFiManager wifiManager;
+#endif
 
 unsigned long lastConnectionAttempt = 0;
 const unsigned long connectionInterval = 10000;
 
+#ifdef ESP32
+void connectToWiFi()
+{
+
+  // if a WiFi setup AP was started, reboot is required to clear routes
+  bool wifiWebServerStarted = false;
+  wifiManager.setWebServerCallback(
+      [&wifiWebServerStarted]()
+      { wifiWebServerStarted = true; });
+
+  wifiManager.setHostname(WIFI_HOSTNAME);
+  wifiManager.autoConnect(WIFI_MANAGER_SSID);
+
+  if (MDNS.begin(WIFI_HOSTNAME))
+  {
+    MDNS.addService("http", "tcp", 80);
+    MDNS.setInstanceName(WIFI_HOSTNAME);
+  }
+  else
+  {
+    Serial.println("Could not start mDNS!");
+  }
+
+  if (wifiWebServerStarted)
+  {
+    // Reboot required, otherwise wifiManager server interferes with our server
+    Serial.println("Done running WiFi Manager webserver - rebooting");
+    ESP.restart();
+  }
+
+  lastConnectionAttempt = millis();
+}
+#endif
+
+#ifdef ESP8266
 void connectToWiFi()
 {
   Serial.println("Connecting to Wi-Fi...");
 
   // Delete old config
   WiFi.disconnect(true);
+
+#if defined(IP_ADDRESS) && defined(GWY) && defined(SUBNET) && defined(DNS1) && \
+    defined(DNS2)
+  auto ip = IPAddress();
+  ip.fromString(IP_ADDRESS);
+
+  auto gwy = IPAddress();
+  gwy.fromString(GWY);
+
+  auto subnet = IPAddress();
+  subnet.fromString(SUBNET);
+
+  auto dns1 = IPAddress();
+  dns1.fromString(DNS1);
+
+  auto dns2 = IPAddress();
+  dns2.fromString(DNS2);
+
+  WiFi.config(ip, gwy, subnet, dns1, dns2);
+#endif
 
   WiFi.setHostname(WIFI_HOSTNAME);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -74,6 +139,7 @@ void connectToWiFi()
 
   lastConnectionAttempt = millis();
 }
+#endif
 
 void setup()
 {
@@ -108,12 +174,14 @@ void setup()
   pluginManager.addPlugin(new CirclePlugin());
   pluginManager.addPlugin(new RainPlugin());
   pluginManager.addPlugin(new FireworkPlugin());
+  pluginManager.addPlugin(new PongClockPlugin());
 
 #ifdef ENABLE_SERVER
   pluginManager.addPlugin(new BigClockPlugin());
   pluginManager.addPlugin(new ClockPlugin());
   pluginManager.addPlugin(new WeatherPlugin());
   pluginManager.addPlugin(new AnimationPlugin());
+  pluginManager.addPlugin(new TickingClockPlugin());
 #endif
 
   pluginManager.init();
@@ -121,6 +189,9 @@ void setup()
 
 void loop()
 {
+
+  Messages.scrollMessageEveryMinute();
+
   pluginManager.runActivePlugin();
 
   if (WiFi.status() != WL_CONNECTED && millis() - lastConnectionAttempt > connectionInterval)
